@@ -1,0 +1,30 @@
+# Binaries
+lucy-server
+lucy-client
+
+# Configs & Secrets
+config.toml
+config_*.toml
+*.crt
+*.key
+*.pem
+
+# Logs
+*.log
+test/*.log
+client.log
+server.log
+ping.log
+
+# Testing
+test/certs
+test/server.toml
+test/client.toml
+test/www
+test/http.log
+test/server.log
+test/client.log
+test_env/
+
+# OS files
+.DS_Store

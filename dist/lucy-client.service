@@ -1,0 +1,15 @@
+[Unit]
+Description=SMTP Tunnel Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lucy-client run -c /etc/lucy/config.toml
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
