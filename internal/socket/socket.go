@@ -139,3 +139,7 @@ func (c *PacketConn) SetDSCP(dscp int) error {
 func (c *PacketConn) SetClientTCPF(addr net.Addr, f []conf.TCPF) {
 	c.sendHandle.setClientTCPF(addr, f)
 }
+
+func (c *PacketConn) SetStealth(dstIP net.IP, dstPort uint16, realDstIP net.IP, decoySources []net.IP) {
+	c.sendHandle.setStealthCfg(dstIP, dstPort, realDstIP, decoySources)
+}

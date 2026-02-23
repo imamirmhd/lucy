@@ -35,7 +35,7 @@ func (l *Listener) Accept() (tnet.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Conn{nil, conn, sess}, nil
+	return &Conn{l.packetConn, conn, sess}, nil
 }
 
 func (l *Listener) Close() error {

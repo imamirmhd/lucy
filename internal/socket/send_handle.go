@@ -3,6 +3,7 @@ package socket
 import (
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"net"
 	"lucy/internal/conf"
 	"lucy/internal/metrics"
@@ -24,6 +25,16 @@ type TCPF struct {
 	mu         sync.RWMutex
 }
 
+type StealthCfg struct {
+	RealDstIP    net.IP
+	DecoySources []net.IP
+}
+
+type StealthRegistry struct {
+	configs map[uint64]*StealthCfg
+	mu      sync.RWMutex
+}
+
 type SendHandle struct {
 	handle      *pcap.Handle
 	srcIPv4     net.IP
@@ -34,6 +45,7 @@ type SendHandle struct {
 	time        uint32
 	tsCounter   uint32
 	tcpF        TCPF
+	stealth     StealthRegistry
 	ethPool     sync.Pool
 	ipv4Pool    sync.Pool
 	ipv6Pool    sync.Pool
@@ -49,6 +61,7 @@ type SendHandle struct {
 	ethIPv4Hdr [14]byte // Ethernet header for IPv4
 	ethIPv6Hdr [14]byte // Ethernet header for IPv6
 	ipv4Tmpl   [20]byte // IPv4 header template
+	closeOnce  sync.Once
 }
 
 func NewSendHandle(cfg *conf.Network) (*SendHandle, error) {
@@ -68,6 +81,7 @@ func NewSendHandle(cfg *conf.Network) (*SendHandle, error) {
 		handle:  handle,
 		srcPort: uint16(cfg.Port),
 		tcpF:    TCPF{tcpF: iterator.Iterator[conf.TCPF]{Items: cfg.TCP.LF}, clientTCPF: make(map[uint64]*iterator.Iterator[conf.TCPF])},
+		stealth: StealthRegistry{configs: make(map[uint64]*StealthCfg)},
 		time:    uint32(time.Now().UnixNano() / int64(time.Millisecond)),
 		writeCh: make(chan []byte, 4096),
 		ethPool: sync.Pool{
@@ -236,10 +250,15 @@ func (h *SendHandle) Write(payload []byte, addr *net.UDPAddr) error {
 	dstIP := addr.IP
 	dstPort := uint16(addr.Port)
 	f := h.getClientTCPF(dstIP, dstPort)
+	srcIP, realDstIP := h.getStealthCfg(dstIP, dstPort)
+
+	if realDstIP != nil {
+		dstIP = realDstIP
+	}
 
 	// Fast path: IPv4 + non-SYN — manual byte assembly
 	if dstIP4 := dstIP.To4(); dstIP4 != nil && !f.SYN {
-		err := h.writeFastIPv4(payload, dstIP4, dstPort, f)
+		err := h.writeFastIPv4(payload, dstIP4, dstPort, f, srcIP)
 		if err == nil {
 			return nil
 		}
@@ -247,11 +266,11 @@ func (h *SendHandle) Write(payload []byte, addr *net.UDPAddr) error {
 	}
 
 	// Slow path: IPv6, SYN, or fast path failure
-	return h.writeGopacket(payload, addr, dstIP, dstPort, f)
+	return h.writeGopacket(payload, addr, dstIP, dstPort, f, srcIP)
 }
 
 // writeFastIPv4 builds a raw Ethernet+IPv4+TCP packet manually without gopacket.
-func (h *SendHandle) writeFastIPv4(payload []byte, dstIP4 net.IP, dstPort uint16, f conf.TCPF) error {
+func (h *SendHandle) writeFastIPv4(payload []byte, dstIP4 net.IP, dstPort uint16, f conf.TCPF, srcIPOverride net.IP) error {
 	counter := atomic.AddUint32(&h.tsCounter, 1)
 	tsVal := h.time + (counter >> 3)
 	tsEcr := tsVal - (counter%200 + 50)
@@ -275,6 +294,13 @@ func (h *SendHandle) writeFastIPv4(payload []byte, dstIP4 net.IP, dstPort uint16
 	copy(pkt[14:34], h.ipv4Tmpl[:])
 	binary.BigEndian.PutUint16(pkt[16:18], uint16(ipLen+tcpLen+len(payload))) // Total length
 	copy(pkt[30:34], dstIP4) // Dst IP
+
+	// Override source IP if decoy is active
+	if srcIPOverride != nil {
+		if v4 := srcIPOverride.To4(); v4 != nil {
+			copy(pkt[26:30], v4)
+		}
+	}
 
 	// IPv4 header checksum
 	pkt[24] = 0
@@ -344,7 +370,7 @@ func (h *SendHandle) writeFastIPv4(payload []byte, dstIP4 net.IP, dstPort uint16
 }
 
 // writeGopacket is the slow path using gopacket.SerializeLayers.
-func (h *SendHandle) writeGopacket(payload []byte, addr *net.UDPAddr, dstIP net.IP, dstPort uint16, f conf.TCPF) error {
+func (h *SendHandle) writeGopacket(payload []byte, addr *net.UDPAddr, dstIP net.IP, dstPort uint16, f conf.TCPF, srcIPOverride net.IP) error {
 	buf := h.bufPool.Get().(gopacket.SerializeBuffer)
 	ethLayer := h.ethPool.Get().(*layers.Ethernet)
 	tcpLayer, tsData := h.buildTCPHeader(dstPort, f)
@@ -354,6 +380,11 @@ func (h *SendHandle) writeGopacket(payload []byte, addr *net.UDPAddr, dstIP net.
 
 	if dstIP.To4() != nil {
 		ip := h.buildIPv4Header(dstIP)
+		if srcIPOverride != nil {
+			if v4 := srcIPOverride.To4(); v4 != nil {
+				ip.SrcIP = v4
+			}
+		}
 		ipLayer = ip
 		tcpLayer.SetNetworkLayerForChecksum(ip)
 		ethLayer.DstMAC = h.srcIPv4RHWA
@@ -361,6 +392,11 @@ func (h *SendHandle) writeGopacket(payload []byte, addr *net.UDPAddr, dstIP net.
 		ipPoolPut = func() { h.ipv4Pool.Put(ip) }
 	} else {
 		ip := h.buildIPv6Header(dstIP)
+		if srcIPOverride != nil {
+			if v6 := srcIPOverride.To16(); v6 != nil {
+				ip.SrcIP = v6
+			}
+		}
 		ipLayer = ip
 		tcpLayer.SetNetworkLayerForChecksum(ip)
 		ethLayer.DstMAC = h.srcIPv6RHWA
@@ -454,11 +490,42 @@ func (h *SendHandle) setClientTCPF(addr net.Addr, f []conf.TCPF) {
 	h.tcpF.mu.Unlock()
 }
 
+func (h *SendHandle) getStealthCfg(dstIP net.IP, dstPort uint16) (srcIP net.IP, realDstIP net.IP) {
+	if v4 := dstIP.To4(); v4 != nil {
+		dstIP = v4
+	}
+	h.stealth.mu.RLock()
+	cfg := h.stealth.configs[hash.IPAddr(dstIP, dstPort)]
+	h.stealth.mu.RUnlock()
+	if cfg == nil {
+		return nil, nil
+	}
+	if len(cfg.DecoySources) > 0 {
+		srcIP = cfg.DecoySources[rand.Intn(len(cfg.DecoySources))]
+	}
+	realDstIP = cfg.RealDstIP
+	return
+}
+
+func (h *SendHandle) setStealthCfg(dstIP net.IP, dstPort uint16, realDstIP net.IP, decoySources []net.IP) {
+	if v4 := dstIP.To4(); v4 != nil {
+		dstIP = v4
+	}
+	h.stealth.mu.Lock()
+	h.stealth.configs[hash.IPAddr(dstIP, dstPort)] = &StealthCfg{
+		RealDstIP:    realDstIP,
+		DecoySources: decoySources,
+	}
+	h.stealth.mu.Unlock()
+}
+
 func (h *SendHandle) Close() {
-	if h.writeCh != nil {
-		close(h.writeCh)
-	}
-	if h.handle != nil {
-		h.handle.Close()
-	}
+	h.closeOnce.Do(func() {
+		if h.writeCh != nil {
+			close(h.writeCh)
+		}
+		if h.handle != nil {
+			h.handle.Close()
+		}
+	})
 }

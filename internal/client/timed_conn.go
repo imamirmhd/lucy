@@ -13,14 +13,13 @@ import (
 	"time"
 )
 
-const autoExpireSecs = 300
+const reconnectDelay = 2 * time.Second
 
 type timedConn struct {
-	cfg    *conf.Conf
-	conn   tnet.Conn
-	expire time.Time
-	ctx    context.Context
-	mu     sync.Mutex
+	cfg  *conf.Conf
+	conn tnet.Conn
+	ctx  context.Context
+	mu   sync.Mutex
 }
 
 func newTimedConn(ctx context.Context, cfg *conf.Conf) (*timedConn, error) {
@@ -30,34 +29,22 @@ func newTimedConn(ctx context.Context, cfg *conf.Conf) (*timedConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	tc.expire = time.Now().Add(autoExpireSecs * time.Second)
 	return &tc, nil
 }
 
-// getConn returns a healthy connection, reconnecting if stale or dead.
-// Caller must hold no lock; this method handles its own synchronization.
+// getConn returns a healthy connection, reconnecting if the connection is dead.
 func (tc *timedConn) getConn() (tnet.Conn, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	needReconnect := false
+	needReconnect := tc.conn == nil
 
-	// Check expiry — proactively rotate before session degrades
-	if time.Now().After(tc.expire) {
-		flog.Debugf("connection expired, rotating...")
-		needReconnect = true
-	}
-
-	// Check liveness
-	if !needReconnect && tc.conn != nil {
+	// Check liveness via ping
+	if !needReconnect {
 		if err := tc.conn.Ping(false); err != nil {
 			flog.Infof("connection lost, reconnecting...")
 			needReconnect = true
 		}
-	}
-
-	if tc.conn == nil {
-		needReconnect = true
 	}
 
 	if needReconnect {
@@ -70,7 +57,6 @@ func (tc *timedConn) getConn() (tnet.Conn, error) {
 			return nil, fmt.Errorf("reconnect failed: %w", err)
 		}
 		tc.conn = conn
-		tc.expire = time.Now().Add(autoExpireSecs * time.Second)
 	}
 
 	return tc.conn, nil
@@ -83,6 +69,13 @@ func (tc *timedConn) createConn() (tnet.Conn, error) {
 		return nil, fmt.Errorf("could not create packet conn: %w", err)
 	}
 
+	// Enable decoy source spoofing BEFORE dialing so the KCP handshake
+	// itself uses the spoofed source IP from the very first packet.
+	if tc.cfg.Stealth.Enabled() {
+		serverAddr := tc.cfg.Server.Addr
+		pConn.SetStealth(serverAddr.IP, uint16(serverAddr.Port), nil, tc.cfg.Stealth.DecoySources)
+	}
+
 	conn, err := kcp.Dial(tc.cfg.Server.Addr, tc.cfg.Transport.KCP, pConn)
 	if err != nil {
 		return nil, err
@@ -90,6 +83,12 @@ func (tc *timedConn) createConn() (tnet.Conn, error) {
 	err = tc.sendTCPF(conn)
 	if err != nil {
 		return nil, err
+	}
+	if tc.cfg.Stealth.Enabled() {
+		err = tc.sendStealth(conn, pConn)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return conn, nil
 }
@@ -106,6 +105,39 @@ func (tc *timedConn) sendTCPF(conn tnet.Conn) error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+func (tc *timedConn) sendStealth(conn tnet.Conn, pConn *socket.PacketConn) error {
+	strm, err := conn.OpenStrm()
+	if err != nil {
+		return fmt.Errorf("stealth: open stream: %w", err)
+	}
+	defer strm.Close()
+
+	p := protocol.Proto{
+		Type:             protocol.PSTEALTH,
+		StealthSources:   tc.cfg.Stealth.DecoySources,
+		StealthRealIP:    tc.cfg.Stealth.RealIP,
+		StealthResponses: tc.cfg.Stealth.DecoyResponses,
+	}
+	if err := p.Write(strm); err != nil {
+		return fmt.Errorf("stealth: write: %w", err)
+	}
+
+	// Read server's response with its decoy responses
+	var resp protocol.Proto
+	if err := resp.Read(strm); err != nil {
+		return fmt.Errorf("stealth: read response: %w", err)
+	}
+	if resp.Type != protocol.PSTEALTH {
+		return fmt.Errorf("stealth: unexpected response type: %d", resp.Type)
+	}
+
+	// Decoy source IPs are already active (set before KCP dial)
+	flog.Infof("stealth mode enabled: %d decoy sources, %d server decoy responses",
+		len(tc.cfg.Stealth.DecoySources), len(resp.StealthResponses))
+
 	return nil
 }
 

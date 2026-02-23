@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"net"
 
 	"lucy/internal/flog"
 	"lucy/internal/metrics"
@@ -64,6 +65,8 @@ func (s *Server) handleStrm(ctx context.Context, strm tnet.Strm) error {
 			s.pConn.SetClientTCPF(strm.RemoteAddr(), p.TCPF)
 		}
 		return nil
+	case protocol.PSTEALTH:
+		return s.handleStealth(strm, &p)
 	case protocol.PTCP:
 		cid := metrics.Tracker.Register(metrics.ConnStream, strm.RemoteAddr().String(), p.Addr.String(), strm.SID())
 		defer metrics.Tracker.Unregister(cid)
@@ -76,4 +79,35 @@ func (s *Server) handleStrm(ctx context.Context, strm tnet.Strm) error {
 		flog.Errorf("unknown protocol type %d on stream %d", p.Type, strm.SID())
 		return fmt.Errorf("unknown protocol type: %d", p.Type)
 	}
+}
+
+func (s *Server) handleStealth(strm tnet.Strm, p *protocol.Proto) error {
+	flog.Infof("stealth handshake from %s: %d decoy sources, %d decoy responses, real IP %s",
+		strm.RemoteAddr(), len(p.StealthSources), len(p.StealthResponses), p.StealthRealIP)
+
+	// If client provided a real IP, configure server to override destination IP
+	// to the real IP when replying to any of the client's decoy sources (preserving port).
+	if len(p.StealthRealIP) > 0 {
+		clientUDP := strm.RemoteAddr().(*net.UDPAddr)
+		clientPort := uint16(clientUDP.Port)
+
+		// Register mapping for the current address KCP sees
+		s.pConn.SetStealth(clientUDP.IP, clientPort, p.StealthRealIP, p.StealthResponses)
+
+		// Register mapping for all known decoy sources the client might roam to
+		for _, decoyIP := range p.StealthSources {
+			s.pConn.SetStealth(decoyIP, clientPort, p.StealthRealIP, p.StealthResponses)
+		}
+
+		flog.Infof("stealth: server will rewrite dst IP to %s and use %d spoofed sources for client port %d",
+			p.StealthRealIP, len(p.StealthResponses), clientPort)
+	}
+
+	// Reply with an empty PSTEALTH ack (server doesn't configure its own decoys via config)
+	resp := protocol.Proto{Type: protocol.PSTEALTH}
+	if err := resp.Write(strm); err != nil {
+		return fmt.Errorf("stealth: write response: %w", err)
+	}
+
+	return nil
 }

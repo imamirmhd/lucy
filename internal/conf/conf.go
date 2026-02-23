@@ -19,6 +19,7 @@ type Conf struct {
 	Network   Network   `yaml:"network"`
 	Server    Server    `yaml:"server"`
 	Transport Transport `yaml:"transport"`
+	Stealth   Stealth   `yaml:"stealth"`
 }
 
 func LoadFromFile(path string) (*Conf, error) {
@@ -58,6 +59,7 @@ func (c *Conf) setDefaults() {
 	c.Network.setDefaults(c.Role)
 	c.Server.setDefaults()
 	c.Transport.setDefaults(c.Role)
+	c.Stealth.setDefaults()
 }
 
 func (c *Conf) validate() error {
@@ -83,8 +85,12 @@ func (c *Conf) validate() error {
 
 	allErrors = append(allErrors, c.Network.validate()...)
 	allErrors = append(allErrors, c.Transport.validate()...)
+	allErrors = append(allErrors, c.Stealth.validate()...)
 	if c.Role == "server" {
 		allErrors = append(allErrors, c.Listen.validate()...)
+		if c.Stealth.Enabled() {
+			allErrors = append(allErrors, fmt.Errorf("stealth decoy_sources cannot be configured on the server (parameters are received from client)"))
+		}
 	} else {
 		allErrors = append(allErrors, c.Server.validate()...)
 		if c.Server.Addr.IP.To4() != nil && c.Network.IPv4.Addr == nil {

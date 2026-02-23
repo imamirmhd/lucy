@@ -41,6 +41,16 @@ network:
   # pcap:
     # sockbuf: 4194304                        # 4MB buffer (default for client)
 
+# Stealth mode configuration (optional - disabled by default)
+# Spoofs source/response IPs to make traffic analysis harder.
+# stealth:
+#   real_ip: "192.168.1.100"                    # CHANGE ME: Real client IP (server sends replies here)
+#   decoy_sources:                               # IPs to spoof as packet source (client -> server)
+#     - "1.2.3.4"
+#     - "5.6.7.8"
+#   decoy_responses:                             # IPs the server will spoof as source (server -> client)
+#     - "9.10.11.12"                             # Optional: if omitted, server uses its real IP
+
 # Server connection settings
 server:
   addr: "10.0.0.100:9999"  # CHANGE ME: lucy server address and port

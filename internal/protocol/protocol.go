@@ -6,28 +6,36 @@ import (
 	"io"
 	"lucy/internal/conf"
 	"lucy/internal/tnet"
+	"net"
 )
 
 type PType = byte
 
 const (
-	PPING PType = 0x01
-	PPONG PType = 0x02
-	PTCPF PType = 0x03
-	PTCP  PType = 0x04
-	PUDP  PType = 0x05
+	PPING    PType = 0x01
+	PPONG    PType = 0x02
+	PTCPF    PType = 0x03
+	PTCP     PType = 0x04
+	PUDP     PType = 0x05
+	PSTEALTH PType = 0x06
 )
 
 type Proto struct {
-	Type PType
-	Addr *tnet.Addr
-	TCPF []conf.TCPF
+	Type             PType
+	Addr             *tnet.Addr
+	TCPF             []conf.TCPF
+	StealthSources   []net.IP
+	StealthRealIP    net.IP
+	StealthResponses []net.IP
 }
 
 // Binary format:
 //   [1B type]
 //   If PTCP/PUDP: [2B host_len][host_bytes][2B port]
 //   If PTCPF:     [1B count][ 2B flags_bitfield ]*count
+//   If PSTEALTH:  [1B num_sources][1B ip_len][ip_bytes]...
+//                 [1B real_ip_len][ip_bytes]  (0 len = absent)
+//                 [1B num_responses][1B ip_len][ip_bytes]...
 //   PPING/PPONG:  type byte only
 
 func (p *Proto) Read(r io.Reader) error {
@@ -89,6 +97,58 @@ func (p *Proto) Read(r io.Reader) error {
 	case PPING, PPONG:
 		// No additional data
 
+	case PSTEALTH:
+		// Read decoy sources
+		var countBuf [1]byte
+		if _, err := io.ReadFull(r, countBuf[:]); err != nil {
+			return fmt.Errorf("read stealth sources count: %w", err)
+		}
+		nSources := int(countBuf[0])
+		p.StealthSources = make([]net.IP, nSources)
+		for i := range nSources {
+			var ipLen [1]byte
+			if _, err := io.ReadFull(r, ipLen[:]); err != nil {
+				return fmt.Errorf("read stealth source %d len: %w", i, err)
+			}
+			ipBuf := make([]byte, ipLen[0])
+			if _, err := io.ReadFull(r, ipBuf); err != nil {
+				return fmt.Errorf("read stealth source %d: %w", i, err)
+			}
+			p.StealthSources[i] = net.IP(ipBuf)
+		}
+
+		// Read real ip
+		var realLenBuf [1]byte
+		if _, err := io.ReadFull(r, realLenBuf[:]); err != nil {
+			return fmt.Errorf("read stealth real ip len: %w", err)
+		}
+		realIPLen := int(realLenBuf[0])
+		if realIPLen > 0 {
+			ipBuf := make([]byte, realIPLen)
+			if _, err := io.ReadFull(r, ipBuf); err != nil {
+				return fmt.Errorf("read stealth real ip: %w", err)
+			}
+			p.StealthRealIP = net.IP(ipBuf)
+		}
+
+		// Read decoy responses
+		if _, err := io.ReadFull(r, countBuf[:]); err != nil {
+			return fmt.Errorf("read stealth responses count: %w", err)
+		}
+		nResponses := int(countBuf[0])
+		p.StealthResponses = make([]net.IP, nResponses)
+		for i := range nResponses {
+			var ipLen [1]byte
+			if _, err := io.ReadFull(r, ipLen[:]); err != nil {
+				return fmt.Errorf("read stealth response %d len: %w", i, err)
+			}
+			ipBuf := make([]byte, ipLen[0])
+			if _, err := io.ReadFull(r, ipBuf); err != nil {
+				return fmt.Errorf("read stealth response %d: %w", i, err)
+			}
+			p.StealthResponses[i] = net.IP(ipBuf)
+		}
+
 	default:
 		return fmt.Errorf("unknown protocol type: %d", p.Type)
 	}
@@ -129,9 +189,62 @@ func (p *Proto) Write(w io.Writer) error {
 
 	case PPING, PPONG:
 		// No additional data
+
+	case PSTEALTH:
+		// Write decoy sources
+		if _, err := w.Write([]byte{byte(len(p.StealthSources))}); err != nil {
+			return err
+		}
+		for _, ip := range p.StealthSources {
+			ipBytes := normalizeIP(ip)
+			if _, err := w.Write([]byte{byte(len(ipBytes))}); err != nil {
+				return err
+			}
+			if _, err := w.Write(ipBytes); err != nil {
+				return err
+			}
+		}
+
+		// Write real ip
+		if len(p.StealthRealIP) > 0 {
+			ipBytes := normalizeIP(p.StealthRealIP)
+			if _, err := w.Write([]byte{byte(len(ipBytes))}); err != nil {
+				return err
+			}
+			if _, err := w.Write(ipBytes); err != nil {
+				return err
+			}
+		} else {
+			// No real ip — write 0 length
+			if _, err := w.Write([]byte{0}); err != nil {
+				return err
+			}
+		}
+
+		// Write decoy responses
+		if _, err := w.Write([]byte{byte(len(p.StealthResponses))}); err != nil {
+			return err
+		}
+		for _, ip := range p.StealthResponses {
+			ipBytes := normalizeIP(ip)
+			if _, err := w.Write([]byte{byte(len(ipBytes))}); err != nil {
+				return err
+			}
+			if _, err := w.Write(ipBytes); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
+}
+
+// normalizeIP returns a 4-byte slice for IPv4 or 16-byte slice for IPv6.
+func normalizeIP(ip net.IP) []byte {
+	if v4 := ip.To4(); v4 != nil {
+		return v4
+	}
+	return ip.To16()
 }
 
 func encodeTCPF(f conf.TCPF) uint16 {

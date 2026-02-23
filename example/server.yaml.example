@@ -35,6 +35,11 @@ network:
   # pcap:
     # sockbuf: 8388608                         # 8MB buffer (default for server)
 
+# Stealth mode: configured on the client side.
+# When a client connects with stealth enabled, the server automatically
+# uses the client-provided decoy response IPs as source addresses.
+# No server-side stealth configuration is needed.
+
 # Transport protocol configuration
 transport:
   protocol: "kcp"  # Transport protocol (currently only "kcp" supported)

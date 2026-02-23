@@ -1,6 +1,6 @@
 # lucy
 
-A high-performance bidirectional packet-level proxy that tunnels traffic over KCP using raw TCP packets. Built for maximum throughput with encrypted transport, SOCKS5 proxy support, and port forwarding.
+A high-performance bidirectional packet-level proxy that tunnels traffic over KCP using raw TCP packets. Built for maximum throughput with encrypted transport, SOCKS5 proxy support, port forwarding, and stealth mode with IP address spoofing.
 
 ## How It Works
 
@@ -452,6 +452,40 @@ forward:
 
 ---
 
+### `stealth` (Client Only)
+
+Stealth mode spoofs source IP addresses on both sides to make traffic analysis harder. Disabled by default. Configured on the client side only — parameters are exchanged with the server during connection setup.
+
+```yaml
+stealth:
+  real_ip: "192.168.1.100"             # Real client IP (server sends replies here)
+  decoy_sources:               # IPs to spoof as packet source (client → server)
+    - "1.2.3.4"
+    - "5.6.7.8"
+  decoy_responses:             # IPs the server will spoof as source (server → client)
+    - "9.10.11.12"             # Optional: if omitted, server uses its real IP
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `real_ip` | string | *required** | Real client IP — server delivers reply packets here |
+| `decoy_sources` | []string | — | List of IPs to randomly use as source in client→server packets |
+| `decoy_responses` | []string | — | List of IPs the server will randomly use as source in server→client packets |
+
+**How it works:**
+
+1. After connection + authentication, the client sends its real address, decoy sources, and desired response addresses to the server
+2. The client randomly picks a decoy source IP for each outgoing packet
+3. The server randomly picks a decoy response IP for each reply, sending to the client's `real_ip` (port is preserved from the KCP session)
+4. If `decoy_responses` is omitted, the server replies using its real IP
+
+\* `real_ip` and at least one `decoy_sources` entry are required to enable stealth mode.
+
+> **Note:** Source IP spoofing requires raw socket access (already required by lucy). Intermediate routers with BCP38/uRPF ingress filtering may drop spoofed packets. This feature works best on networks you control.
+
+> **Note:** No server-side configuration is needed — the server automatically uses the parameters provided by the client during the handshake.
+
+
 ## Full Configuration Examples
 
 ### Client
@@ -488,6 +522,15 @@ transport:
   kcp:
     mode: "fast2"
     key: "my-secret-key"
+
+# Optional: stealth mode
+# stealth:
+#   real_ip: "192.168.1.100"
+#   decoy_sources:
+#     - "1.2.3.4"
+#     - "5.6.7.8"
+#   decoy_responses:
+#     - "9.10.11.12"
 ```
 
 ### Server
