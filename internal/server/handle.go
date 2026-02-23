@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"lucy/internal/flog"
 	"lucy/internal/metrics"
@@ -32,8 +33,8 @@ func (s *Server) handleConn(ctx context.Context, conn tnet.Conn) {
 				metrics.ActiveStreams.Add(-1)
 			}()
 			if err := s.handleStrm(ctx, strm); err != nil {
-				if errors.Is(err, io.EOF) {
-					flog.Debugf("stream %d from %s closed (EOF)", strm.SID(), strm.RemoteAddr())
+				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || strings.Contains(err.Error(), "closed pipe") {
+					flog.Debugf("stream %d from %s closed", strm.SID(), strm.RemoteAddr())
 				} else {
 					flog.Errorf("stream %d from %s closed with error: %v", strm.SID(), strm.RemoteAddr(), err)
 				}
