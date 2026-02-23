@@ -30,10 +30,12 @@ func (s *Server) handleUDP(ctx context.Context, strm tnet.Strm, addr string, cid
 	errChan := make(chan error, 2)
 	go func() {
 		err := buffer.CopyU(conn, metrics.NewTrackerReader(strm, cid))
+		conn.Close() // trigger teardown of the other direction
 		errChan <- err
 	}()
 	go func() {
 		err := buffer.CopyU(metrics.NewTrackerWriter(strm, cid), conn)
+		strm.Close() // trigger teardown of the other direction
 		errChan <- err
 	}()
 

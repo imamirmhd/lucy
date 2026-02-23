@@ -6,6 +6,7 @@ import (
 	"lucy/internal/conf"
 	"lucy/internal/metrics"
 	"runtime"
+	"sync"
 
 	"github.com/gopacket/gopacket"
 	"github.com/gopacket/gopacket/layers"
@@ -22,6 +23,8 @@ type RecvHandle struct {
 	udp     layers.UDP
 	payload gopacket.Payload
 	decoded []gopacket.LayerType
+
+	addrPool sync.Pool
 }
 
 func NewRecvHandle(cfg *conf.Network) (*RecvHandle, error) {
@@ -45,6 +48,11 @@ func NewRecvHandle(cfg *conf.Network) (*RecvHandle, error) {
 	rh := &RecvHandle{
 		handle:  handle,
 		decoded: make([]gopacket.LayerType, 0, 6),
+		addrPool: sync.Pool{
+			New: func() any {
+				return &net.UDPAddr{IP: make(net.IP, 16)}
+			},
+		},
 	}
 
 	rh.parser = gopacket.NewDecodingLayerParser(
@@ -72,16 +80,19 @@ func (h *RecvHandle) Read() ([]byte, net.Addr, error) {
 		return nil, nil, nil
 	}
 
-	addr := &net.UDPAddr{}
+	addr := h.addrPool.Get().(*net.UDPAddr)
+	addr.Port = 0
+	addr.Zone = ""
+
 	var hasNetwork, hasTransport, hasPayload bool
 
 	for _, lt := range h.decoded {
 		switch lt {
 		case layers.LayerTypeIPv4:
-			addr.IP = h.ipv4.SrcIP
+			addr.IP = append(addr.IP[:0], h.ipv4.SrcIP...)
 			hasNetwork = true
 		case layers.LayerTypeIPv6:
-			addr.IP = h.ipv6.SrcIP
+			addr.IP = append(addr.IP[:0], h.ipv6.SrcIP...)
 			hasNetwork = true
 		case layers.LayerTypeTCP:
 			addr.Port = int(h.tcp.SrcPort)
@@ -95,6 +106,7 @@ func (h *RecvHandle) Read() ([]byte, net.Addr, error) {
 	}
 
 	if !hasNetwork || !hasTransport || !hasPayload {
+		h.addrPool.Put(addr)
 		return nil, nil, nil
 	}
 

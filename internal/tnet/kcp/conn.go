@@ -35,24 +35,28 @@ func (c *Conn) AcceptStrm() (tnet.Strm, error) {
 }
 
 func (c *Conn) Ping(wait bool) error {
+	if !wait {
+		if c.Session.IsClosed() {
+			return fmt.Errorf("session is closed")
+		}
+		return nil
+	}
 	strm, err := c.Session.OpenStream()
 	if err != nil {
 		return fmt.Errorf("ping failed: %v", err)
 	}
 	defer strm.Close()
-	if wait {
-		p := protocol.Proto{Type: protocol.PPING}
-		err = p.Write(strm)
-		if err != nil {
-			return fmt.Errorf("strm ping write failed: %v", err)
-		}
-		err = p.Read(strm)
-		if err != nil {
-			return fmt.Errorf("strm ping read failed: %v", err)
-		}
-		if p.Type != protocol.PPONG {
-			return fmt.Errorf("strm pong failed: %v", err)
-		}
+	p := protocol.Proto{Type: protocol.PPING}
+	err = p.Write(strm)
+	if err != nil {
+		return fmt.Errorf("strm ping write failed: %v", err)
+	}
+	err = p.Read(strm)
+	if err != nil {
+		return fmt.Errorf("strm ping read failed: %v", err)
+	}
+	if p.Type != protocol.PPONG {
+		return fmt.Errorf("strm pong failed: %v", err)
 	}
 	return nil
 }
@@ -71,6 +75,7 @@ func (c *Conn) Close() error {
 	return err
 }
 
+func (c *Conn) IsClosed() bool                     { return c.Session.IsClosed() }
 func (c *Conn) LocalAddr() net.Addr                { return c.Session.LocalAddr() }
 func (c *Conn) RemoteAddr() net.Addr               { return c.Session.RemoteAddr() }
 func (c *Conn) SetDeadline(t time.Time) error      { return c.Session.SetDeadline(t) }

@@ -13,11 +13,11 @@ import (
 // It opens streams on accepted client connections to request
 // the remote client to dial out on behalf of the server.
 type Client struct {
-	conns   []tnet.Conn
-	mu      sync.Mutex
-	idx     int
+	conns    []tnet.Conn
+	mu       sync.Mutex
+	idx      int
 	udpStrms map[uint64]tnet.Strm
-	udpMu   sync.RWMutex
+	udpMu    sync.RWMutex
 }
 
 func NewClient() *Client {
@@ -35,12 +35,37 @@ func (c *Client) AddConn(conn tnet.Conn) {
 func (c *Client) nextConn() (tnet.Conn, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(c.conns) == 0 {
+
+	n := len(c.conns)
+	if n == 0 {
 		return nil, fmt.Errorf("no connections available")
 	}
-	conn := c.conns[c.idx%len(c.conns)]
-	c.idx++
-	return conn, nil
+
+	// Try up to n connections, pruning dead ones
+	for range n {
+		idx := c.idx % len(c.conns)
+		c.idx++
+
+		conn := c.conns[idx]
+		if conn.IsClosed() {
+			// Remove dead connection by swapping with last
+			last := len(c.conns) - 1
+			c.conns[idx] = c.conns[last]
+			c.conns[last] = nil // help GC
+			c.conns = c.conns[:last]
+			flog.Debugf("pruned dead connection from pool, %d remaining", len(c.conns))
+			if len(c.conns) == 0 {
+				return nil, fmt.Errorf("no live connections available")
+			}
+			// Adjust index since we swapped
+			if c.idx > 0 {
+				c.idx--
+			}
+			continue
+		}
+		return conn, nil
+	}
+	return nil, fmt.Errorf("no live connections available")
 }
 
 func (c *Client) TCP(addr string) (tnet.Strm, error) {

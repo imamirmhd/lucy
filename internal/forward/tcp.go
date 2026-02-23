@@ -63,10 +63,12 @@ func (f *Forward) handleTCPConn(ctx context.Context, conn net.Conn) error {
 	errCh := make(chan error, 2)
 	go func() {
 		err := buffer.CopyT(conn, metrics.NewTrackerReader(strm, cid))
+		conn.Close() // trigger teardown of the other direction
 		errCh <- err
 	}()
 	go func() {
 		err := buffer.CopyT(metrics.NewTrackerWriter(strm, cid), conn)
+		strm.Close() // trigger teardown of the other direction
 		errCh <- err
 	}()
 

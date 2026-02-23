@@ -43,16 +43,15 @@ type ConnSnapshot struct {
 }
 
 // ConnTracker is a thread-safe registry of active connections.
+// Uses sync.Map for optimal read-heavy workloads (Get is called on every
+// data transfer, Register/Unregister are much less frequent).
 type ConnTracker struct {
-	mu    sync.RWMutex
-	conns map[uint64]*ConnInfo
+	conns sync.Map // map[uint64]*ConnInfo
 	seq   atomic.Uint64
 }
 
 // Tracker is the global connection tracker singleton.
-var Tracker = &ConnTracker{
-	conns: make(map[uint64]*ConnInfo),
-}
+var Tracker = &ConnTracker{}
 
 // Register adds a new connection and returns its assigned ID.
 func (ct *ConnTracker) Register(typ ConnType, source, target string, streamID int) uint64 {
@@ -65,34 +64,30 @@ func (ct *ConnTracker) Register(typ ConnType, source, target string, streamID in
 		StreamID: streamID,
 		Start:    time.Now(),
 	}
-	ct.mu.Lock()
-	ct.conns[id] = info
-	ct.mu.Unlock()
+	ct.conns.Store(id, info)
 	TotalConns.Add(1)
 	return id
 }
 
 // Unregister removes a connection from tracking.
 func (ct *ConnTracker) Unregister(id uint64) {
-	ct.mu.Lock()
-	delete(ct.conns, id)
-	ct.mu.Unlock()
+	ct.conns.Delete(id)
 }
 
 // Get returns the ConnInfo for byte-counter updates. Returns nil if not found.
 func (ct *ConnTracker) Get(id uint64) *ConnInfo {
-	ct.mu.RLock()
-	info := ct.conns[id]
-	ct.mu.RUnlock()
-	return info
+	v, ok := ct.conns.Load(id)
+	if !ok {
+		return nil
+	}
+	return v.(*ConnInfo)
 }
 
 // Snapshot returns a copy-safe slice of all active connections.
 func (ct *ConnTracker) Snapshot() []ConnSnapshot {
-	ct.mu.RLock()
-	defer ct.mu.RUnlock()
-	out := make([]ConnSnapshot, 0, len(ct.conns))
-	for _, c := range ct.conns {
+	var out []ConnSnapshot
+	ct.conns.Range(func(key, value any) bool {
+		c := value.(*ConnInfo)
 		out = append(out, ConnSnapshot{
 			ID:       c.ID,
 			Type:     c.Type,
@@ -103,14 +98,17 @@ func (ct *ConnTracker) Snapshot() []ConnSnapshot {
 			BytesTX:  c.BytesTX.Load(),
 			BytesRX:  c.BytesRX.Load(),
 		})
-	}
+		return true
+	})
 	return out
 }
 
 // Count returns the number of tracked connections.
 func (ct *ConnTracker) Count() int {
-	ct.mu.RLock()
-	n := len(ct.conns)
-	ct.mu.RUnlock()
+	n := 0
+	ct.conns.Range(func(_, _ any) bool {
+		n++
+		return true
+	})
 	return n
 }

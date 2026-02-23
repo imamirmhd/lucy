@@ -48,7 +48,14 @@ func (p *Proto) Read(r io.Reader) error {
 			return fmt.Errorf("host too long: %d", hostLen)
 		}
 
-		hostBuf := make([]byte, hostLen)
+		// Stack-allocate for small hostnames (covers ~99% of cases)
+		var stackBuf [64]byte
+		var hostBuf []byte
+		if hostLen <= 64 {
+			hostBuf = stackBuf[:hostLen]
+		} else {
+			hostBuf = make([]byte, hostLen)
+		}
 		if _, err := io.ReadFull(r, hostBuf); err != nil {
 			return fmt.Errorf("read host: %w", err)
 		}

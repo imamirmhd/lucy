@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 
 	"lucy/internal/flog"
 	"lucy/internal/metrics"
@@ -30,7 +32,11 @@ func (s *Server) handleConn(ctx context.Context, conn tnet.Conn) {
 				metrics.ActiveStreams.Add(-1)
 			}()
 			if err := s.handleStrm(ctx, strm); err != nil {
-				flog.Errorf("stream %d from %s closed with error: %v", strm.SID(), strm.RemoteAddr(), err)
+				if errors.Is(err, io.EOF) {
+					flog.Debugf("stream %d from %s closed (EOF)", strm.SID(), strm.RemoteAddr())
+				} else {
+					flog.Errorf("stream %d from %s closed with error: %v", strm.SID(), strm.RemoteAddr(), err)
+				}
 			} else {
 				flog.Debugf("stream %d from %s closed", strm.SID(), strm.RemoteAddr())
 			}
@@ -42,6 +48,9 @@ func (s *Server) handleStrm(ctx context.Context, strm tnet.Strm) error {
 	var p protocol.Proto
 	err := p.Read(strm)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return err
+		}
 		flog.Errorf("failed to read protocol message from stream %d: %v", strm.SID(), err)
 		return err
 	}

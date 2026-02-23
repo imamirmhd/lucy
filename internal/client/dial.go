@@ -7,26 +7,14 @@ import (
 	"time"
 )
 
-const maxRetries = 3
+const maxRetries = 5
 
 func (c *Client) newConn() (tnet.Conn, error) {
 	c.mu.Lock()
 	tc := c.iter.Next()
 	c.mu.Unlock()
 
-	autoExpire := 300
-	err := tc.conn.Ping(false)
-	if err != nil {
-		flog.Infof("connection lost, retrying....")
-		if tc.conn != nil {
-			tc.conn.Close()
-		}
-		if conn, err := tc.createConn(); err == nil {
-			tc.conn = conn
-		}
-		tc.expire = time.Now().Add(time.Duration(autoExpire) * time.Second)
-	}
-	return tc.conn, nil
+	return tc.getConn()
 }
 
 func (c *Client) newStrm() (tnet.Strm, error) {

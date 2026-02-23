@@ -109,9 +109,8 @@ func (f *Forward) handleUDPStrm(ctx context.Context, k uint64, cid uint64, strm 
 			return
 		default:
 		}
-		strm.SetDeadline(time.Now().Add(8 * time.Second))
+		strm.SetReadDeadline(time.Now().Add(8 * time.Second))
 		n, err := strm.Read(buf)
-		strm.SetDeadline(time.Time{})
 		if err != nil {
 			flog.Errorf("UDP stream %d read failed for %s -> %s: %v", strm.SID(), caddr, f.targetAddr, err)
 			return
