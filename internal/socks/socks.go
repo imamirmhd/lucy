@@ -25,6 +25,7 @@ func New(provider tnet.StreamProvider) (*SOCKS5, error) {
 
 func (s *SOCKS5) Start(ctx context.Context, cfg conf.SOCKS5) error {
 	s.handle.ctx = ctx
+	s.handle.streams = cfg.Streams
 	go s.listen(ctx, cfg)
 	return nil
 }

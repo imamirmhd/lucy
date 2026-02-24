@@ -96,6 +96,22 @@ func (c *Client) TCP(addr string) (tnet.Strm, error) {
 	return strm, nil
 }
 
+// TCPBond opens count individual streams (no bonding on server side).
+func (c *Client) TCPBond(addr string, count int) ([]tnet.Strm, error) {
+	streams := make([]tnet.Strm, count)
+	for i := range count {
+		strm, err := c.TCP(addr)
+		if err != nil {
+			for j := range i {
+				streams[j].Close()
+			}
+			return nil, err
+		}
+		streams[i] = strm
+	}
+	return streams, nil
+}
+
 func (c *Client) UDP(lAddr, tAddr string) (tnet.Strm, bool, uint64, error) {
 	key := hash.AddrPair(lAddr, tAddr)
 

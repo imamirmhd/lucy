@@ -18,6 +18,7 @@ const (
 	PTCP     PType = 0x04
 	PUDP     PType = 0x05
 	PSTEALTH PType = 0x06
+	PMULTI   PType = 0x07
 )
 
 type Proto struct {
@@ -27,6 +28,9 @@ type Proto struct {
 	StealthSources   []net.IP
 	StealthRealIP    net.IP
 	StealthResponses []net.IP
+	BondID           uint32
+	BondTotal        uint8
+	BondIndex        uint8
 }
 
 // Binary format:
@@ -46,6 +50,15 @@ func (p *Proto) Read(r io.Reader) error {
 	p.Type = hdr[0]
 
 	switch p.Type {
+	case PMULTI:
+		var bondHdr [6]byte // 4B bond_id + 1B total + 1B index
+		if _, err := io.ReadFull(r, bondHdr[:]); err != nil {
+			return fmt.Errorf("read bond header: %w", err)
+		}
+		p.BondID = binary.BigEndian.Uint32(bondHdr[0:4])
+		p.BondTotal = bondHdr[4]
+		p.BondIndex = bondHdr[5]
+		fallthrough // addr follows, same as PTCP
 	case PTCP, PUDP:
 		var lenBuf [2]byte
 		if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
@@ -162,6 +175,15 @@ func (p *Proto) Write(w io.Writer) error {
 	}
 
 	switch p.Type {
+	case PMULTI:
+		var bondHdr [6]byte
+		binary.BigEndian.PutUint32(bondHdr[0:4], p.BondID)
+		bondHdr[4] = p.BondTotal
+		bondHdr[5] = p.BondIndex
+		if _, err := w.Write(bondHdr[:]); err != nil {
+			return err
+		}
+		fallthrough // addr follows, same as PTCP
 	case PTCP, PUDP:
 		if p.Addr == nil {
 			return fmt.Errorf("addr required for type %d", p.Type)

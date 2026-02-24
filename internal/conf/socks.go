@@ -9,6 +9,7 @@ type SOCKS5 struct {
 	Listen_   string       `yaml:"listen"`
 	Username  string       `yaml:"username"`
 	Password  string       `yaml:"password"`
+	Streams   int          `yaml:"streams"`
 	RateLimit RateLimit    `yaml:"rate_limit"`
 	Listen    *net.UDPAddr `yaml:"-"`
 }
@@ -21,6 +22,9 @@ type RateLimit struct {
 }
 
 func (c *SOCKS5) setDefaults() {
+	if c.Streams < 1 {
+		c.Streams = 1
+	}
 	if c.RateLimit.Enabled == nil {
 		t := true
 		c.RateLimit.Enabled = &t

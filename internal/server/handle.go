@@ -89,6 +89,8 @@ func (s *Server) handleStrm(ctx context.Context, strm tnet.Strm) error {
 		cid := metrics.Tracker.Register(metrics.ConnStream, strm.RemoteAddr().String(), p.Addr.String(), strm.SID())
 		defer metrics.Tracker.Unregister(cid)
 		return s.handleTCPProtocol(ctx, strm, &p, cid)
+	case protocol.PMULTI:
+		return s.handleBond(ctx, p.BondID, int(p.BondTotal), int(p.BondIndex), p.Addr.String(), strm)
 	case protocol.PUDP:
 		cid := metrics.Tracker.Register(metrics.ConnStream, strm.RemoteAddr().String(), p.Addr.String(), strm.SID())
 		defer metrics.Tracker.Unregister(cid)

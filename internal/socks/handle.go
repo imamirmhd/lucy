@@ -9,4 +9,5 @@ type Handler struct {
 	provider    tnet.StreamProvider
 	ctx         context.Context
 	rateLimiter *rateLimiter
+	streams     int
 }

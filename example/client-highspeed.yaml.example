@@ -1,0 +1,53 @@
+# lucy Client Configuration — High-Speed Profile
+#
+# Maximum throughput. 32 connections, 4-stream bonding, huge buffers,
+# no encryption, no congestion control. For bulk transfers on trusted
+# networks where every MB/s matters.
+#
+# Benchmark results (Hetzner 100MB test):
+#   Single stream:  ~14 MB/s avg
+#   4-stream bond:  ~15.5 MB/s avg, peak 22.7 MB/s
+
+role: "client"
+
+log:
+  level: "info"
+
+socks5:
+  - listen: "127.0.0.1:1080"
+    streams: 4                     # 4-stream bonding per download
+
+network:
+  interface: "eth0"               # CHANGE ME
+  ipv4:
+    addr: "192.168.1.100:0"       # CHANGE ME
+    router_mac: "aa:bb:cc:dd:ee:ff" # CHANGE ME
+  pcap:
+    sockbuf: 16777216              # 16MB receive buffer
+
+server:
+  addr: "10.0.0.100:9999"        # CHANGE ME
+
+transport:
+  protocol: "kcp"
+  conn: 32                        # 32 connections across CPU cores
+  tcpbuf: 262144                  # 256KB copy buffer (vs 8KB default)
+
+  kcp:
+    mode: "manual"
+    nodelay: 1                    # Fast retransmission
+    interval: 10                  # 10ms flush interval
+    resend: 2                     # Retransmit after 2 skipped ACKs
+    nocongestion: 1               # No congestion control — push max speed
+    wdelay: true                  # Batch writes for throughput
+    acknodelay: false             # Batch ACKs to save bandwidth
+
+    mtu: 1400
+    rcvwnd: 32768                 # 32K receive window
+    sndwnd: 32768                 # 32K send window
+
+    block: "none"                 # No encryption — max CPU savings
+    key: "your-secret-key-here"   # CHANGE ME
+
+    smuxbuf: 33554432             # 32MB SMUX buffer
+    streambuf: 16777216           # 16MB per-stream buffer

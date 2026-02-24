@@ -25,6 +25,7 @@ type Server struct {
 	dialer net.Dialer
 	wg     sync.WaitGroup
 	client *Client
+	bonds  *bondManager
 }
 
 func New(cfg *conf.Conf) (*Server, error) {
@@ -32,6 +33,7 @@ func New(cfg *conf.Conf) (*Server, error) {
 		cfg:    cfg,
 		dialer: net.Dialer{Timeout: 10 * time.Second},
 		client: NewClient(),
+		bonds:  newBondManager(),
 	}
 
 	return s, nil

@@ -1,0 +1,39 @@
+# lucy Server Configuration — Balanced Profile
+#
+# Matches the balanced client profile.
+
+role: "server"
+
+log:
+  level: "info"
+
+listen:
+  addr: ":9999"                   # CHANGE ME
+
+network:
+  interface: "eth0"               # CHANGE ME
+  ipv4:
+    addr: "10.0.0.100:9999"       # CHANGE ME
+    router_mac: "aa:bb:cc:dd:ee:ff" # CHANGE ME
+  pcap:
+    sockbuf: 8388608
+
+transport:
+  protocol: "kcp"
+  conn: 4
+  tcpbuf: 65536
+
+  kcp:
+    mode: "fast2"
+    mtu: 1400
+    rcvwnd: 4096
+    sndwnd: 4096
+    block: "aes-128-gcm"
+    key: "your-secret-key-here"   # CHANGE ME
+    smuxbuf: 8388608
+    streambuf: 4194304
+
+# Firewall:
+#   sudo iptables -t raw -A PREROUTING -p tcp --dport 9999 -j NOTRACK
+#   sudo iptables -t raw -A OUTPUT -p tcp --sport 9999 -j NOTRACK
+#   sudo iptables -t mangle -A OUTPUT -p tcp --sport 9999 --tcp-flags RST RST -j DROP

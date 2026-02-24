@@ -1,0 +1,40 @@
+# lucy Client Configuration — Balanced Profile
+#
+# Good mix of throughput and resource usage. Multiple connections for
+# parallelism, larger windows, lightweight encryption. Suitable for
+# streaming, moderate downloads, and multi-tab browsing.
+
+role: "client"
+
+log:
+  level: "info"
+
+socks5:
+  - listen: "127.0.0.1:1080"
+    streams: 2                     # 2 parallel streams per download (bonded)
+
+network:
+  interface: "eth0"               # CHANGE ME
+  ipv4:
+    addr: "192.168.1.100:0"       # CHANGE ME
+    router_mac: "aa:bb:cc:dd:ee:ff" # CHANGE ME
+  pcap:
+    sockbuf: 8388608               # 8MB receive buffer
+
+server:
+  addr: "10.0.0.100:9999"        # CHANGE ME
+
+transport:
+  protocol: "kcp"
+  conn: 4                         # 4 connections — better parallelism
+  tcpbuf: 65536                   # 64KB copy buffer
+
+  kcp:
+    mode: "fast2"                  # Aggressive retransmit, low latency
+    mtu: 1400
+    rcvwnd: 4096
+    sndwnd: 4096
+    block: "aes-128-gcm"          # Fast authenticated encryption
+    key: "your-secret-key-here"   # CHANGE ME
+    smuxbuf: 8388608               # 8MB SMUX buffer
+    streambuf: 4194304             # 4MB per-stream buffer
