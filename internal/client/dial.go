@@ -32,6 +32,11 @@ func (c *Client) newStrm() (tnet.Strm, error) {
 			time.Sleep(backoff)
 			continue
 		}
+		if conn.IsClosed() {
+			lastErr = fmt.Errorf("connection is closed")
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
 		strm, err := conn.OpenStrm()
 		if err != nil {
 			lastErr = err

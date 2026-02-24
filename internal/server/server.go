@@ -96,8 +96,12 @@ func (s *Server) listen(ctx context.Context, listener tnet.Listener) {
 				flog.Debugf("listener closed, stopping accept loop")
 				return
 			}
+			if strings.Contains(errStr, "canceled") {
+				flog.Warnf("accept error (context canceled), listener dead — exiting for restart")
+				return
+			}
 			flog.Errorf("failed to accept connection: %v", err)
-			continue
+			return
 		}
 		flog.Infof("accepted new connection from %s (local: %s)", conn.RemoteAddr(), conn.LocalAddr())
 		metrics.ActiveConns.Add(1)

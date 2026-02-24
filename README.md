@@ -423,13 +423,27 @@ socks5:
   - listen: "127.0.0.1:1080"
     username: ""       # Optional authentication
     password: ""       # Optional authentication
+    rate_limit:
+      enabled: true    # Enable per-IP rate limiting (default: true)
+      max_fails: 5     # Max failed auth attempts before blocking (default: 5)
+      block_for: "5m"  # Block duration after max failures (default: 5m)
 ```
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `listen` | string | Yes | Bind address (`host:port`) |
-| `username` | string | No | SOCKS5 username (leave empty to disable auth) |
-| `password` | string | No | SOCKS5 password |
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `listen` | string | Yes | — | Bind address (`host:port`) |
+| `username` | string | No | `""` | SOCKS5 username (leave empty to disable auth) |
+| `password` | string | No | `""` | SOCKS5 password |
+
+#### `socks5[].rate_limit`
+
+Per-IP rate limiting to prevent brute-force attacks. Enabled by default.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable/disable rate limiting |
+| `max_fails` | int | `5` | Max failed attempts before blocking the IP |
+| `block_for` | string | `"5m"` | How long to block the IP (Go duration: `30s`, `5m`, `1h`) |
 
 ---
 
@@ -498,6 +512,9 @@ log:
 
 socks5:
   - listen: "127.0.0.1:1080"
+    # rate_limit:          # Enabled by default
+    #   max_fails: 5       # Block after 5 failed attempts
+    #   block_for: "5m"    # Block duration
 
 forward:
   - listen: "127.0.0.1:8080"

@@ -69,9 +69,8 @@ func (c *Conn) Close() error {
 	if c.Session != nil {
 		c.Session.Close()
 	}
-	if c.PacketConn != nil {
-		c.PacketConn.Close()
-	}
+	// NOTE: PacketConn is NOT closed here — it is shared with the KCP listener
+	// and other connections. Only the listener owns (and closes) the PacketConn.
 	return err
 }
 

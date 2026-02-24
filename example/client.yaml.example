@@ -11,6 +11,10 @@ socks5:
   - listen: "127.0.0.1:1080"    # SOCKS5 proxy listen address
     username: ""                # Optional SOCKS5 authentication
     password: ""                # Optional SOCKS5 authentication
+    # rate_limit:               # Per-IP rate limiting (enabled by default)
+    #   enabled: true           # Enable/disable rate limiting
+    #   max_fails: 5            # Max failed auth attempts before blocking IP
+    #   block_for: "5m"         # Block duration (Go duration: 30s, 5m, 1h)
 
 # Port forwarding configuration (can be used alongside SOCKS5)
 # forward:
