@@ -10,56 +10,119 @@ import (
 	"lucy/internal/tnet"
 	"lucy/internal/tnet/kcp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-const reconnectDelay = 2 * time.Second
+const (
+	healthCheckInterval = 5 * time.Second
+	maxBackoff          = 30 * time.Second
+	initialBackoff      = 1 * time.Second
+)
 
 type timedConn struct {
-	cfg  *conf.Conf
-	conn tnet.Conn
-	ctx  context.Context
-	mu   sync.Mutex
+	cfg    *conf.Conf
+	conn   atomic.Pointer[tnet.Conn]
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// reconnectMu prevents multiple concurrent reconnection attempts
+	reconnectMu sync.Mutex
 }
 
 func newTimedConn(ctx context.Context, cfg *conf.Conf) (*timedConn, error) {
-	var err error
-	tc := timedConn{cfg: cfg, ctx: ctx}
-	tc.conn, err = tc.createConn()
+	childCtx, cancel := context.WithCancel(ctx)
+	tc := &timedConn{cfg: cfg, ctx: childCtx, cancel: cancel}
+
+	conn, err := tc.createConn()
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	return &tc, nil
+	tc.conn.Store(&conn)
+	return tc, nil
 }
 
-// getConn returns a healthy connection, reconnecting if the connection is dead.
+// getConn returns the current connection — a single atomic load, zero lock contention.
+// Returns nil error with nil conn if reconnecting.
 func (tc *timedConn) getConn() (tnet.Conn, error) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
+	p := tc.conn.Load()
+	if p == nil {
+		return nil, fmt.Errorf("connection unavailable, reconnecting")
+	}
+	return *p, nil
+}
 
-	needReconnect := tc.conn == nil
+// reconnectLoop runs in the background, monitoring connection health
+// and reconnecting with exponential backoff on failure.
+func (tc *timedConn) reconnectLoop() {
+	ticker := time.NewTicker(healthCheckInterval)
+	defer ticker.Stop()
 
-	// Check liveness via ping
-	if !needReconnect {
-		if err := tc.conn.Ping(false); err != nil {
-			flog.Infof("connection lost, reconnecting...")
-			needReconnect = true
+	for {
+		select {
+		case <-tc.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		p := tc.conn.Load()
+		if p == nil {
+			// Connection is nil — reconnect immediately
+			tc.doReconnect()
+			continue
+		}
+
+		// Check liveness
+		if err := (*p).Ping(false); err != nil {
+			flog.Infof("connection lost, starting reconnect...")
+			tc.doReconnect()
+		}
+	}
+}
+
+func (tc *timedConn) doReconnect() {
+	tc.reconnectMu.Lock()
+	defer tc.reconnectMu.Unlock()
+
+	// Double-check: another goroutine may have already reconnected
+	if p := tc.conn.Load(); p != nil {
+		if err := (*p).Ping(false); err == nil {
+			return // already healthy
 		}
 	}
 
-	if needReconnect {
-		if tc.conn != nil {
-			tc.conn.Close()
+	// Close old connection
+	if p := tc.conn.Load(); p != nil {
+		(*p).Close()
+		tc.conn.Store(nil)
+	}
+
+	backoff := initialBackoff
+	for {
+		select {
+		case <-tc.ctx.Done():
+			return
+		default:
 		}
+
+		flog.Infof("attempting reconnect (backoff: %v)...", backoff)
 		conn, err := tc.createConn()
 		if err != nil {
-			tc.conn = nil
-			return nil, fmt.Errorf("reconnect failed: %w", err)
+			flog.Errorf("reconnect failed: %v, retrying in %v", err, backoff)
+			select {
+			case <-tc.ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, maxBackoff)
+			continue
 		}
-		tc.conn = conn
-	}
 
-	return tc.conn, nil
+		tc.conn.Store(&conn)
+		flog.Infof("reconnected successfully")
+		return
+	}
 }
 
 func (tc *timedConn) createConn() (tnet.Conn, error) {
@@ -142,10 +205,9 @@ func (tc *timedConn) sendStealth(conn tnet.Conn, pConn *socket.PacketConn) error
 }
 
 func (tc *timedConn) close() {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	if tc.conn != nil {
-		tc.conn.Close()
-		tc.conn = nil
+	tc.cancel()
+	if p := tc.conn.Load(); p != nil {
+		(*p).Close()
+		tc.conn.Store(nil)
 	}
 }

@@ -14,24 +14,40 @@ import (
 	"lucy/internal/tnet"
 )
 
+const maxStreamsPerConn = 512
+
 func (s *Server) handleConn(ctx context.Context, conn tnet.Conn) {
+	sem := make(chan struct{}, maxStreamsPerConn)
 	for {
 		select {
 		case <-ctx.Done():
-			flog.Debugf("stopping smux session for %s due to context cancellation", conn.RemoteAddr())
 			return
 		default:
 		}
 		strm, err := conn.AcceptStrm()
 		if err != nil {
-			flog.Errorf("failed to accept stream on %s: %v", conn.RemoteAddr(), err)
+			if ctx.Err() != nil {
+				return // shutting down
+			}
+			flog.Debugf("stream accept on %s ended: %v", conn.RemoteAddr(), err)
 			return
 		}
+
+		// Non-blocking semaphore check — reject excess streams instantly
+		select {
+		case sem <- struct{}{}:
+		default:
+			strm.Close()
+			flog.Debugf("stream %d rejected: concurrency limit (%d) reached for %s", strm.SID(), maxStreamsPerConn, conn.RemoteAddr())
+			continue
+		}
+
 		metrics.ActiveStreams.Add(1)
 		s.wg.Go(func() {
 			defer func() {
 				strm.Close()
 				metrics.ActiveStreams.Add(-1)
+				<-sem
 			}()
 			if err := s.handleStrm(ctx, strm); err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || strings.Contains(err.Error(), "closed pipe") {

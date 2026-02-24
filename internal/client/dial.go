@@ -23,16 +23,23 @@ func (c *Client) newStrm() (tnet.Strm, error) {
 		conn, err := c.newConn()
 		if err != nil {
 			lastErr = err
-			backoff := time.Duration(500*(1<<attempt)) * time.Millisecond
-			flog.Debugf("session creation failed (attempt %d/%d), retrying in %v", attempt+1, maxRetries, backoff)
+			// Brief wait — the background reconnect loop is doing the heavy lifting
+			backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
+			if backoff > 2*time.Second {
+				backoff = 2 * time.Second
+			}
+			flog.Debugf("no connection available (attempt %d/%d), waiting %v", attempt+1, maxRetries, backoff)
 			time.Sleep(backoff)
 			continue
 		}
 		strm, err := conn.OpenStrm()
 		if err != nil {
 			lastErr = err
-			backoff := time.Duration(500*(1<<attempt)) * time.Millisecond
-			flog.Debugf("failed to open stream (attempt %d/%d), retrying in %v: %v", attempt+1, maxRetries, backoff, err)
+			backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
+			if backoff > 2*time.Second {
+				backoff = 2 * time.Second
+			}
+			flog.Debugf("failed to open stream (attempt %d/%d): %v", attempt+1, maxRetries, err)
 			time.Sleep(backoff)
 			continue
 		}

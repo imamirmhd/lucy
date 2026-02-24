@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -87,6 +88,14 @@ func (s *Server) listen(ctx context.Context, listener tnet.Listener) {
 		}
 		conn, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return // shutting down
+			}
+			errStr := err.Error()
+			if strings.Contains(errStr, "closed") || strings.Contains(errStr, "shutdown") {
+				flog.Debugf("listener closed, stopping accept loop")
+				return
+			}
 			flog.Errorf("failed to accept connection: %v", err)
 			continue
 		}
